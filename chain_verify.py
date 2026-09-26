@@ -29,6 +29,35 @@ END_MARK = "-----END ANON CHAIN-----"
 
 
 # ---------------------------------------------------------------------------
+# 输出层（只改展示，不改变任何验证逻辑）
+# ---------------------------------------------------------------------------
+GREEN = "32"
+RED = "31"
+YELLOW = "33"
+DIM = "2"
+RESET = "0"
+
+COLOR_ENABLED = True
+VERBOSE = False
+QUIET = False
+
+
+def color(s, code):
+    """仅在 TTY 且未禁用颜色时输出 ANSI 颜色；否则原样返回。"""
+    if not COLOR_ENABLED or not sys.stdout.isatty():
+        return s
+    return f"\x1b[{code}m{s}\x1b[0m"
+
+
+def set_output(verbose=False, quiet=False, color_enabled=True):
+    """设置输出层全局开关（由 main 调用）。"""
+    global VERBOSE, QUIET, COLOR_ENABLED
+    VERBOSE = verbose
+    QUIET = quiet
+    COLOR_ENABLED = color_enabled
+
+
+# ---------------------------------------------------------------------------
 # 基础工具
 # ---------------------------------------------------------------------------
 def sha256_hex(data):
@@ -74,24 +103,24 @@ def load_post_file(path):
     打印中文错误并以退出码 2 退出。
     """
     if not os.path.exists(path):
-        print(f"❌ 无法读取文件：{path}（文件不存在）")
+        print(f"error: cannot read file: {path} (not found)", file=sys.stderr)
         sys.exit(2)
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = f.read()
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"❌ 无法读取文件：{path}（{exc}）")
+        print(f"error: cannot read file: {path} ({exc})", file=sys.stderr)
         sys.exit(2)
 
     content, payload_text = split_post(raw)
     if content is None:
-        print(f"❌ 未找到 ANON CHAIN 标记：{path}")
+        print(f"error: missing ANON CHAIN markers: {path}", file=sys.stderr)
         sys.exit(2)
 
     try:
         payload = json.loads(payload_text)
     except ValueError as exc:
-        print(f"❌ payload JSON 解析失败：{path}（{exc}）")
+        print(f"error: payload JSON parse failed: {path} ({exc})", file=sys.stderr)
         sys.exit(2)
 
     return content, payload
@@ -101,90 +130,126 @@ def load_post_file(path):
 # 帖子校验
 # ---------------------------------------------------------------------------
 def verify_post(name, content, payload, expected_prev):
-    """校验单帖，逐条打印结果，返回 (ok, value, index)。
+    """校验单帖，返回结构化结果（不直接打印）。
 
-    name 为用于展示的文件名；expected_prev 为上一帖公开的 value
-    （第 1 帖或单帖验证缺失上一帖时传 None）。
+    name 为展示用文件名；expected_prev 为上一帖公开的 value（第 1 帖或
+    缺失上一帖时传 None）。返回字典：
+      name, index, ok, value, checks:{hash,bind,chain}, errors, detail
+    校验规则与原实现完全一致。
     """
-    ok = True
     index = payload.get("index", "?")
-    print(f"--- 第 {index} 帖（{name}）---")
+    result = {
+        "name": name,
+        "index": index,
+        "ok": True,
+        "value": None,
+        "checks": {"hash": True, "bind": True, "chain": True},
+        "errors": [],
+        "detail": [],
+    }
 
     required = ["scheme", "hash", "index", "prev", "value", "content_hash", "bind"]
     missing = [k for k in required if k not in payload]
     if missing:
-        print(f"  ❌ payload 缺少字段：{', '.join(missing)}")
-        return False, None, None
+        result["ok"] = False
+        result["errors"].append({"code": "missing", "msg": f"payload missing fields: {', '.join(missing)}"})
+        result["detail"].append((False, f"payload missing fields: {', '.join(missing)}"))
+        return result
 
     if payload["scheme"] != SCHEME:
-        print(f"  ❌ scheme 不匹配：期望 {SCHEME!r}，实际 {payload['scheme']!r}")
-        return False, None, None
+        result["ok"] = False
+        result["errors"].append({"code": "scheme", "msg": f"scheme mismatch: expected {SCHEME!r}, got {payload['scheme']!r}"})
+        result["detail"].append((False, "scheme mismatch"))
+        return result
     if payload["hash"] != HASH_NAME:
-        print(f"  ❌ hash 算法不匹配：期望 {HASH_NAME!r}，实际 {payload['hash']!r}")
-        return False, None, None
+        result["ok"] = False
+        result["errors"].append({"code": "hash", "msg": f"hash mismatch: expected {HASH_NAME!r}, got {payload['hash']!r}"})
+        result["detail"].append((False, "hash algorithm mismatch"))
+        return result
 
     idx = payload["index"]
     value = payload["value"]
     prev = payload["prev"]
+    result["value"] = value
 
     # 正文哈希：content_hash == SHA256(正文)
     expected_content_hash = sha256_text(content)
     if payload["content_hash"] == expected_content_hash:
-        print("  ✅ 正文哈希匹配")
+        result["detail"].append((True, "content hash ok"))
     else:
-        print("  ❌ 正文哈希不匹配（content_hash 与正文的 SHA-256 不一致）")
-        ok = False
+        result["ok"] = False
+        result["checks"]["hash"] = False
+        result["detail"].append((False, "content hash mismatch"))
+        result["errors"].append({
+            "code": "content_hash",
+            "msg": "content_hash mismatch (post tampered)",
+            "expected": expected_content_hash,
+            "actual": payload["content_hash"],
+        })
 
     # 内容绑定：bind == SHA256(value + "|" + content_hash)
     expected_bind = sha256_text(value + "|" + payload["content_hash"])
     if payload["bind"] == expected_bind:
-        print("  ✅ 内容绑定匹配")
+        result["detail"].append((True, "bind ok"))
     else:
-        print('  ❌ 内容绑定不匹配（bind != SHA256(value + "|" + content_hash)）')
-        ok = False
+        result["ok"] = False
+        result["checks"]["bind"] = False
+        result["detail"].append((False, "bind mismatch"))
+        result["errors"].append({
+            "code": "bind",
+            "msg": "bind mismatch",
+            "expected": expected_bind,
+            "actual": payload["bind"],
+        })
 
     # 链值连续 / 锚点
     if idx == 1:
         if prev == "":
-            print("  ✅ 锚点正常")
+            result["detail"].append((True, "anchor ok"))
         else:
-            print("  ❌ 锚点异常：第 1 帖的 prev 必须为空字符串")
-            ok = False
+            result["ok"] = False
+            result["checks"]["chain"] = False
+            result["detail"].append((False, "anchor broken: post 1 prev must be empty"))
+            result["errors"].append({"code": "anchor", "msg": "anchor broken: post 1 prev must be empty"})
     else:
         if expected_prev is None:
-            print(f"  ❌ 缺失上一帖（第 {idx - 1} 帖）：index 不连续，无法验证链值连续性")
-            ok = False
+            result["ok"] = False
+            result["checks"]["chain"] = False
+            result["detail"].append((False, f"missing post {idx - 1}: index not continuous"))
+            result["errors"].append({"code": "chain", "msg": f"missing post {idx - 1}: index not continuous"})
         elif prev == expected_prev and sha256_text(value) == prev:
-            print("  ✅ 链值连续")
+            result["detail"].append((True, "chain continuous"))
         else:
-            print("  ❌ 链值不连续：SHA256(value) ≠ prev（prev 不匹配）")
-            ok = False
+            result["ok"] = False
+            result["checks"]["chain"] = False
+            result["detail"].append((False, "chain broken: SHA256(value) != prev"))
+            result["errors"].append({
+                "code": "chain",
+                "msg": "SHA256(value) != prev",
+                "expected": expected_prev,
+                "actual": prev,
+            })
 
-    return ok, value, idx
+    return result
 
 
 # ---------------------------------------------------------------------------
 # 链条校验
 # ---------------------------------------------------------------------------
 def verify_chain(posts):
-    """对已载入的帖子列表按 index 排序后整体校验，返回是否全部通过。
+    """对已载入的帖子列表按 index 排序后整体校验，返回 (all_ok, results)。
 
-    posts 为 [(name, content, payload), ...] 列表。
+    posts 为 [(name, content, payload), ...] 列表；results 为按展示顺序排列的
+    每个帖子的 verify_post 结果字典。
     """
+    results = []
     if not posts:
-        print("❌ 没有可验证的帖子")
-        return False
+        return False, results
 
     try:
         ordered = sorted(posts, key=lambda t: t[2]["index"])
     except (KeyError, TypeError):
-        print("❌ 存在缺少 index 字段的帖子，无法排序")
-        return False
-
-    original_indices = [t[2].get("index") for t in posts]
-    sorted_indices = [t[2].get("index") for t in ordered]
-    if original_indices != sorted_indices:
-        print("⚠️ 传入顺序与 index 不符，已自动按 index 排序")
+        return False, results
 
     all_ok = True
     expected_prev = None
@@ -192,19 +257,72 @@ def verify_chain(posts):
     for name, content, payload in ordered:
         idx = payload.get("index")
         if idx != expect_index:
-            print(f"❌ index 不连续：期望第 {expect_index} 帖，实际第 {idx} 帖")
+            res = verify_post(name, content, payload, None)
+            res["ok"] = False
+            res["errors"].insert(0, {"code": "gap", "msg": f"index not continuous: expected {expect_index}, got {idx}"})
+            res["detail"].insert(0, (False, f"index not continuous: expected {expect_index}, got {idx}"))
+            results.append(res)
             all_ok = False
-            ok, _, _ = verify_post(name, content, payload, None)
-            all_ok = all_ok and ok
             if isinstance(idx, int):
                 expect_index = idx + 1
             continue
-        ok, value, _ = verify_post(name, content, payload, expected_prev)
-        all_ok = all_ok and ok
-        expected_prev = value
+        res = verify_post(name, content, payload, expected_prev)
+        results.append(res)
+        all_ok = all_ok and res["ok"]
+        expected_prev = res.get("value")
         expect_index += 1
 
-    return all_ok
+    return all_ok, results
+
+
+# ---------------------------------------------------------------------------
+# 结果渲染
+# ---------------------------------------------------------------------------
+def print_results(results, ok):
+    """打印紧凑验证表格与总结（ASCII，颜色仅在 TTY 生效）。"""
+    if not results:
+        print(color("verify: FAIL", RED))
+        print("  no posts to verify")
+        return
+
+    def cell(text, good):
+        return color(text.ljust(6), GREEN if good else RED)
+
+    print(f"{'POST':<6} {'HASH':<6} {'BIND':<6} {'CHAIN':<6}")
+    for r in results:
+        idx = r["index"]
+        post = f"{idx:02d}" if isinstance(idx, int) else str(idx)
+        c = r["checks"]
+        print(f"{post:<6} {cell('ok' if c['hash'] else 'FAIL', c['hash'])} "
+              f"{cell('ok' if c['bind'] else 'FAIL', c['bind'])} "
+              f"{cell('ok' if c['chain'] else 'FAIL', c['chain'])}")
+    print()
+    print_summary(ok, results)
+
+
+def print_summary(ok, results):
+    """打印验证总结（不含表格）；失败时附带错误详情。"""
+    if ok:
+        n = len(results)
+        print(color(f"verify: pass ({n} posts, same origin, order ok, no tamper)", GREEN))
+    else:
+        print(color("verify: FAIL", RED))
+        for r in results:
+            for e in r["errors"]:
+                print(f"  {r['name']}: {e['msg']}")
+                if e.get("expected") is not None:
+                    print(f"  expected  {e['expected']}")
+                    print(f"  actual    {e['actual']}")
+
+
+def print_verbose(results):
+    """逐帖打印详细验证过程（--verbose 时使用，ASCII）。"""
+    for r in results:
+        idx = r["index"]
+        print(f"--- post {idx} ({r['name']}) ---")
+        for good, text in r["detail"]:
+            mark = "ok" if good else "FAIL"
+            print(f"  {color(mark, GREEN if good else RED)}  {text}")
 
 
 # ---------------------------------------------------------------------------
@@ -216,11 +334,11 @@ def collect_dir(dirpath):
     目录不存在或无 .txt 文件时打印中文错误并以退出码 2 退出。
     """
     if not os.path.isdir(dirpath):
-        print(f"❌ 目录不存在：{dirpath}")
+        print(f"error: directory not found: {dirpath}", file=sys.stderr)
         sys.exit(2)
     names = sorted(n for n in os.listdir(dirpath) if n.endswith(".txt"))
     if not names:
-        print(f"❌ 目录中没有 .txt 帖子文件：{dirpath}")
+        print(f"error: no .txt post files in directory: {dirpath}", file=sys.stderr)
         sys.exit(2)
     return [os.path.join(dirpath, n) for n in names]
 
@@ -229,24 +347,28 @@ def parse_args(argv=None):
     """解析命令行参数，返回 argparse.Namespace。"""
     parser = argparse.ArgumentParser(
         prog="chain_verify.py",
-        description="anon-leak 读者端：验证匿名哈希链帖子",
+        description="anon-leak reader: verify anonymous hash-chain posts",
     )
-    parser.add_argument("files", nargs="*", help="待验证的帖子文件（可多个）")
-    parser.add_argument("--dir", dest="directory", metavar="DIR", help="验证目录下所有 .txt 帖子")
+    parser.add_argument("files", nargs="*", help="post files to verify")
+    parser.add_argument("--dir", dest="directory", metavar="DIR", help="verify all .txt files in DIR")
+    parser.add_argument("-v", "--verbose", action="store_true", help="print per-post detail")
+    parser.add_argument("-q", "--quiet", action="store_true", help="print only the result line")
+    parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     """程序入口：载入帖子、整体校验、按结果打印并设置退出码。"""
     args = parse_args(argv)
+    set_output(verbose=args.verbose, quiet=args.quiet, color_enabled=not args.no_color)
 
     if args.directory:
         paths = collect_dir(args.directory)
     elif args.files:
         paths = args.files
     else:
-        print("❌ 请提供帖子文件或使用 --dir 指定目录", file=sys.stderr)
-        print("用法：python chain_verify.py file1.txt [file2.txt ...]  或  python chain_verify.py --dir posts/", file=sys.stderr)
+        print("error: provide post files or --dir DIR", file=sys.stderr)
+        print("usage: chain_verify.py file1.txt [file2.txt ...]  or  chain_verify.py --dir DIR", file=sys.stderr)
         sys.exit(2)
 
     posts = []
@@ -254,12 +376,15 @@ def main(argv=None):
         content, payload = load_post_file(p)
         posts.append((os.path.basename(p), content, payload))
 
-    if verify_chain(posts):
-        print("🎉 验证通过：所有帖子同源，顺序正确，正文未被篡改")
-        sys.exit(0)
+    ok, results = verify_chain(posts)
+    if VERBOSE:
+        print_verbose(results)
+        print()
+    if QUIET:
+        print("verify: pass" if ok else "verify: FAIL")
     else:
-        print("⚠️ 验证失败，以上错误导致链条不可信")
-        sys.exit(1)
+        print_results(results, ok)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

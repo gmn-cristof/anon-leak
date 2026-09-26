@@ -37,7 +37,25 @@ import chain_verify
 META_FILE = "leak.json"
 GITIGNORE_FILE = ".gitignore"
 EXPORT_DIR = "export"
-VERSION = 1
+VERSION = "0.2.0"
+
+GREEN = "32"
+RED = "31"
+YELLOW = "33"
+CYAN = "36"
+DIM = "2"
+RESET = "0"
+
+# banner 专用
+BRIGHT_CYAN = "96"
+BRIGHT_BLUE = "94"
+BRIGHT_MAGENTA = "95"
+BRIGHT_WHITE = "97"
+BOLD = "1"
+
+_QUIET = False
+_NO_BANNER = False
+_VERBOSE = False
 
 _ROOT = os.getcwd()  # 工作区根目录，main() 里可用 --root 覆盖
 
@@ -76,27 +94,135 @@ def use_leak(name):
 
 
 # ---------------------------------------------------------------------------
-# 输出辅助（与既有脚本风格一致）
+# 输出辅助（专业 CLI 输出层）
 # ---------------------------------------------------------------------------
-def info(msg):
-    print("✅ " + msg)
+def color(s, code):
+    """仅在 TTY 下输出 ANSI 颜色；否则原样返回。"""
+    if not sys.stdout.isatty():
+        return s
+    if os.environ.get("NO_COLOR"):
+        return s
+    if os.environ.get("TERM") == "dumb":
+        return s
+    return f"\x1b[{code}m{s}\x1b[0m"
+
+
+def rel(path):
+    """把绝对路径转成相对当前工作目录的路径（失败则原样返回）。"""
+    try:
+        return os.path.relpath(path, os.getcwd())
+    except ValueError:
+        return path
+
+
+# ---------------------------------------------------------------------------
+# 四级 banner（按命令频率选用不同炫酷程度）
+# ---------------------------------------------------------------------------
+_B1_W = 63  # 级别 1 方块内宽
+
+_B1_ART = [
+    "     ▄▀█ █▄ █ █▀█ █▄ █   █   █▀▀ ▄▀█ █▄▀",
+    "     █▀█ █ ▀█ █▄█ █ ▀█   █▄▄ ██▄ █▀█ █ █",
+]
+_B1_SLOGAN1 = "     anonymous hash-chain leak tool  ·  "
+_B1_SLOGAN2 = "     verify origin without revealing identity"
+
+_B2_ART = [ 
+" █████╗ ███╗   ██╗ ██████╗ ███╗   ██╗    ██╗     ███████╗ █████╗ ██╗  ██╗",
+"██╔══██╗████╗  ██║██╔═══██╗████╗  ██║    ██║     ██╔════╝██╔══██╗██║ ██╔╝",
+"███████║██╔██╗ ██║██║   ██║██╔██╗ ██║    ██║     █████╗  ███████║█████╔╝ ",
+"██╔══██║██║╚██╗██║██║   ██║██║╚██╗██║    ██║     ██╔══╝  ██╔══██║██╔═██╗ ",
+"██║  ██║██║ ╚████║╚██████╔╝██║ ╚████║    ███████╗███████╗██║  ██║██║  ██╗",
+"╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═══╝    ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝",
+]
+
+                                                                                                          
+                                                                                                                                                                                     
+                                                                                                               
+
+
+
+_B2_VER = f"  anon-leak  v{VERSION}"
+
+_B3_LINE1 = "  anon-leak · anonymous hash-chain leak tool"
+_B3_RULE = "  " + "─" * 45
+
+_B4_LINE = f"anon-leak v{VERSION}"
+
+
+def _b1_line(segments):
+    """把 (text, code|None) 段拼成一行，右补空格到 _B1_W，加亮青边框。"""
+    visible = sum(len(t) for t, _ in segments)
+    body = "".join(color(t, c) if c else t for t, c in segments)
+    body += " " * max(0, _B1_W - visible)
+    bar = color("║", BRIGHT_CYAN)
+    return bar + body + bar
+
+
+def _banner_text(level):
+    """返回指定级别 banner 的完整文本（不含尾随空行）。"""
+    if level == 1:
+        art_code = f"{BOLD};{BRIGHT_CYAN}"
+        lines = [
+            color("╔" + "═" * _B1_W + "╗", BRIGHT_CYAN),
+            _b1_line([]),
+        ]
+        for a in _B1_ART:
+            lines.append(_b1_line([(a, art_code)]))
+        lines.append(_b1_line([]))
+        lines.append(_b1_line([(_B1_SLOGAN1, DIM), (f"v{VERSION}", BRIGHT_WHITE)]))
+        lines.append(_b1_line([(_B1_SLOGAN2, DIM)]))
+        lines.append(_b1_line([]))
+        lines.append(color("╚" + "═" * _B1_W + "╝", BRIGHT_CYAN))
+        return "\n".join(lines)
+    if level == 2:
+        art_code = f"{BOLD};{BRIGHT_CYAN}"
+        lines = [color(a, art_code) for a in _B2_ART]
+        lines.append("")
+        lines.append(color(_B2_VER, DIM))
+        return "\n".join(lines)
+    if level == 3:
+        return "\n".join([
+            color(_B3_LINE1, DIM),
+            color(_B3_RULE, DIM),
+            color("  v" + VERSION, BRIGHT_WHITE),
+        ])
+    if level == 4:
+        return _B4_LINE
+    return ""
+
+
+def print_banner(level):
+    """打印指定级别 banner；非 TTY、quiet/no-banner 或 level 为空时静默跳过。"""
+    if not level or _QUIET or _NO_BANNER:
+        return
+    if not sys.stdout.isatty():
+        return
+    print(_banner_text(level))
+    print()
+
+
+def next_block(lines):
+    """命令结尾的 next: 提示；--quiet 时整体不输出。"""
+    if _QUIET:
+        return
+    print()
+    print("next:")
+    for ln in lines:
+        print("  " + ln)
+
+
+def ok(msg):
+    print(color("ok", GREEN) + "  " + msg)
 
 
 def warn(msg):
-    print("⚠️ " + msg)
-
-
-def note(msg):
-    print("📝 " + msg)
-
-
-def skip(msg):
-    print("⏭️ " + msg)
+    print(color("warn:", YELLOW) + " " + msg)
 
 
 def err(msg):
-    print("❌ " + msg, file=sys.stderr)
-    sys.exit(1)
+    print(color("error:", RED) + " " + msg, file=sys.stderr)
+    sys.exit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -105,16 +231,16 @@ def err(msg):
 def validate_leak_name(name):
     """校验 leak 名字，返回错误描述字符串；合法则返回 None。"""
     if not name:
-        return "名字不能为空"
+        return "name cannot be empty"
     if name in (".", ".."):
-        return "名字不能为 . 或 .."
+        return "name cannot be . or .."
     if len(name) > 64:
-        return "名字长度不能超过 64 个字符"
+        return "name too long (max 64 characters)"
     if any(ch in name for ch in "/\\"):
-        return "名字不能包含路径分隔符"
+        return "name cannot contain path separators"
     for ch in name:
         if not (ch.isalnum() or ch in "_-."):
-            return f"名字包含非法字符：{ch!r}"
+            return f"name contains invalid character: {ch!r}"
     return None
 
 
@@ -146,8 +272,8 @@ def resolve_leak(name):
     if len(leaks) == 1:
         return leaks[0]
     if not leaks:
-        err("当前目录下没有任何 leak，请先运行：anon_leak create <名字>")
-    err("有多个 leak，请显式指定名字。候选：" + ", ".join(leaks))
+        err("no leak here; run: anon_leak create <name>")
+    err("multiple leaks, specify a name. candidates: " + ", ".join(leaks))
 
 
 # ---------------------------------------------------------------------------
@@ -183,38 +309,38 @@ def gitignore_covers_secret(name):
 def prompt_seed():
     """用 getpass 隐藏回显输入种子，并要求二次确认。"""
     try:
-        seed = getpass.getpass("请输入种子（seed，输入不回显）：").strip()
+        seed = getpass.getpass("seed (input hidden): ").strip()
     except (EOFError, KeyboardInterrupt):
-        err("未收到种子输入")
+        err("no seed input")
     if not seed:
-        err("种子不能为空")
+        err("seed cannot be empty")
     try:
-        confirm = getpass.getpass("请再次输入种子以确认：").strip()
+        confirm = getpass.getpass("confirm seed: ").strip()
     except (EOFError, KeyboardInterrupt):
-        err("未收到确认输入")
+        err("no confirmation input")
     if seed != confirm:
-        err("两次输入的种子不一致，已取消")
+        err("seed mismatch, cancelled")
     return seed
 
 
 def prompt_length():
-    """交互式输入链长度（正整数），空输入默认 10。"""
+    """交互式输入链长度（正整数），空输入默认 1000000。"""
     try:
-        raw = input("请输入链长度（length，正整数，默认 10）：").strip()
+        raw = input("length (positive integer, default 1000000): ").strip()
     except (EOFError, KeyboardInterrupt):
-        err("未收到链长度输入")
+        err("no length input")
     if raw == "":
-        return 10
+        return 1000000
     try:
         n = int(raw)
     except ValueError:
-        err(f"链长度必须是整数，收到：{raw!r}")
+        err(f"length must be an integer, got: {raw!r}")
     return n
 
 
 def read_content_interactive(index):
     """交互式读取正文：多行粘贴，最后单独一行 EOF 结束。"""
-    print(f"📝 请输入第 {index} 帖正文（多行粘贴，最后单独一行输入 EOF 结束）：")
+    print("content (end with EOF):")
     lines = []
     while True:
         try:
@@ -230,7 +356,7 @@ def read_content_interactive(index):
 def read_file_content(path):
     """读取正文文件，返回去掉末尾换行的内容。"""
     if not os.path.exists(path):
-        err(f"文件不存在：{path}")
+        err(f"file not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
         return f.read().rstrip("\n")
 
@@ -239,7 +365,7 @@ def confirm(question, default=False):
     """交互确认；非 TTY（EOF）时返回 default。"""
     suffix = " [Y/n]" if default else " [y/N]"
     try:
-        ans = input(question + suffix + "：").strip().lower()
+        ans = input(question + suffix + ": ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return default
     if ans == "":
@@ -260,29 +386,30 @@ def do_create(name, seed=None, length=None, random_seed=False):
     """创建一条 leak：建目录、生成链、写元信息与 .gitignore。返回名字。"""
     err_msg = validate_leak_name(name)
     if err_msg:
-        err(f"非法 leak 名字 {name!r}：{err_msg}")
+        err(f"invalid leak name {name!r}: {err_msg}")
     if os.path.exists(leak_dir(name)):
-        err(f"leak 已存在：{leak_dir(name)}（请换个名字，或先手动删除）")
+        err(f"leak already exists: {leak_dir(name)} (rename or remove first)")
 
+    show_full_seed = False
     if random_seed:
         seed = os.urandom(32).hex()
-        print("✅ 已用随机种子生成（请立即离线抄录保存，此后不再显示）：")
-        print("   " + seed)
+        show_full_seed = True
     elif seed is None:
         seed = prompt_seed()
     else:
-        warn("你通过命令行显式传入了种子，注意 shell history 可能泄露它。")
+        warn("seed passed on command line; shell history may leak it.")
 
     if length is None:
         length = prompt_length()
     if length < 1:
-        err("链长度必须为正整数")
+        err("length must be a positive integer")
 
     chain_post.configure(leak_dir(name))
     chain_post.ensure_dirs()
-    chain = chain_post.build_chain(seed, length)
-    chain_post.save_secret(seed, length, chain)
+    chain_post.save_secret(seed, length)
     chain_post.save_state(0)
+
+    root_value = chain_post.get_value(seed, length, 1)
 
     save_meta(name, {
         "name": name,
@@ -294,17 +421,25 @@ def do_create(name, seed=None, length=None, random_seed=False):
     })
     write_gitignore(name)
 
-    print("")
-    info(f"已创建 leak：{name}")
-    info(f"链长度：{length}")
-    info(f"根值（第 1 帖公开的 value）：{chain[0]}")
-    note("请务必离线备份 secret/ 目录，丢失种子将无法继续发布后续帖子。")
-    note(f"下一步：anon_leak start {name} 开始写第一篇爆料。")
+    if show_full_seed:
+        print(f"seed:    {seed}   (store offline now; shown once)")
+    else:
+        print(f"seed:    {'*' * 16}")
+    print(f"length:  {length}")
+    print(f"root:    {root_value[:32]}...")
+    print(f"created: {name}")
+    print(f"backup:  {rel(os.path.join(leak_dir(name), 'secret'))}/ (offline, never publish)")
+    next_block([
+        f"anon_leak start {name}      # write post 1",
+        "anon_leak guide             # anonymous publishing checklist",
+    ])
     return name
 
 
 def cmd_create(args):
     """create 子命令。"""
+    first = not os.path.isdir(os.path.join(leak_dir(args.name), "secret"))
+    print_banner(4 if first else None)
     do_create(args.name, seed=args.seed, length=args.length, random_seed=args.random_seed)
 
 
@@ -320,14 +455,13 @@ def collect_post_files(name):
 
 
 def verify_paths(paths):
-    """验证一组帖子文件，打印逐帖结果，返回是否全部通过。
+    """验证一组帖子文件，返回 (all_ok, results)，不打印任何内容。
 
-    文件缺失/解析错误等由 chain_verify 打印 ❌ 并以 SystemExit(2) 退出，
-    此处捕获并视为验证失败（返回 False）。
+    文件缺失/解析错误等由 chain_verify 打印错误并以 SystemExit(2) 退出，
+    此处捕获并视为验证失败（返回 (False, [])）。
     """
     if not paths:
-        print("❌ 没有可验证的帖子")
-        return False
+        return False, []
     try:
         posts = []
         for p in paths:
@@ -335,7 +469,7 @@ def verify_paths(paths):
             posts.append((os.path.basename(p), content, payload))
         return chain_verify.verify_chain(posts)
     except SystemExit:
-        return False
+        return False, []
 
 
 # ---------------------------------------------------------------------------
@@ -348,11 +482,11 @@ def validate_index(name, index):
     length = secret["length"]
     published = chain_post.load_state().get("published", 0)
     if index < 1 or index > length:
-        err(f"帖号越界：链长度为 {length}，无法生成第 {index} 帖")
+        err(f"post index out of range: length {length}, cannot generate post {index}")
     if index <= published:
-        err(f"第 {index} 帖已生成过（posts/{index:02d}.txt 已存在），请勿重复生成")
+        err(f"post {index} already generated (posts/{index:02d}.txt exists)")
     if index != published + 1:
-        err(f"跳号：当前下一帖应为第 {published + 1} 帖，不能直接生成第 {index} 帖")
+        err(f"skip detected: next post is {published + 1}, cannot generate {index}")
     return secret, published
 
 
@@ -360,79 +494,96 @@ def preview_post(name, index, content):
     """打印第 index 帖的完整渲染预览（不写入任何文件）。"""
     use_leak(name)
     secret = chain_post.load_secret()
-    chain = secret["chain"]
-    prev = "" if index == 1 else chain[index - 2]
-    value = chain[index - 1]
+    prev, value = chain_post.compute_values(secret, index)
     payload = chain_post.make_payload(index, prev, value, content)
-    print("----- 预览（不会写入任何文件）-----")
+    print("----- preview (nothing written) -----")
     print(chain_post.render_post(content, payload), end="")
-    print("----- 预览结束 -----")
+    print("----- end preview -----")
 
 
 def publish_with_rollback(name, index):
     """发布第 index 帖，随后对整条链自检；失败则回滚并报错。"""
     use_leak(name)
-    chain_post.publish(index)  # 校验失败会自行报错退出
-    if not verify_paths(collect_post_files(name)):
-        warn(f"发布自检失败，回滚第 {index} 帖")
+    chain_post.publish(index, quiet=True)  # 校验失败会自行报错退出
+    okv, _ = verify_paths(collect_post_files(name))
+    if not okv:
+        warn(f"post {index} self-check failed, rolling back")
         os.remove(post_path(name, index))
         chain_post.save_state(index - 1)
-        err(f"第 {index} 帖发布自检失败，已回滚，请检查草稿内容")
+        err(f"post {index} self-check failed, rolled back; check draft content")
 
 
 # ---------------------------------------------------------------------------
 # list / status
 # ---------------------------------------------------------------------------
+def leak_status(name):
+    """读取某个 leak 的状态，返回 (name, published, length, next, status)。"""
+    use_leak(name)
+    secret = chain_post.load_secret()
+    length = secret["length"]
+    published = chain_post.load_state().get("published", 0)
+    nxt = published + 1
+    if published >= length:
+        status = "exhausted"
+    elif os.path.exists(draft_path(name, nxt)):
+        status = "drafting"
+    else:
+        status = "idle"
+    return name, published, length, nxt, status
+
+
+_TABLE = {"name": 16, "pub": 10, "len": 10, "next": 6, "status": 10}
+
+
+def _table_header():
+    w = _TABLE
+    return (f"{'NAME'.ljust(w['name'])}  {'PUBLISHED'.rjust(w['pub'])}  "
+            f"{'LENGTH'.rjust(w['len'])}  {'NEXT'.rjust(w['next'])}  {'STATUS'.ljust(w['status'])}")
+
+
+def _table_row(name, published, length, nxt, status):
+    w = _TABLE
+    return (f"{name.ljust(w['name'])}  {str(published).rjust(w['pub'])}  "
+            f"{str(length).rjust(w['len'])}  {str(nxt).rjust(w['next'])}  {status.ljust(w['status'])}")
+
+
 def cmd_list(args):
     """list 子命令：列出所有 leak 及状态。"""
     leaks = discover_leaks()
     if not leaks:
-        print("📝 当前目录下没有任何 leak。运行 anon_leak create <名字> 创建第一个。")
+        print("no leaks yet. run: anon_leak create <name>")
         return
-    print(f"{'名称':<20} {'已发布':>6} {'链长度':>6} {'下一帖':>6}  状态")
-    print("-" * 62)
+    print(_table_header())
     for name in leaks:
-        use_leak(name)
-        secret = chain_post.load_secret()
-        length = secret["length"]
-        published = chain_post.load_state().get("published", 0)
-        nxt = published + 1
-        if published >= length:
-            status = "已用尽"
-        elif os.path.exists(draft_path(name, nxt)):
-            status = "有草稿待发布"
-        else:
-            status = "待写草稿"
-        print(f"{name:<20} {published:>6} {length:>6} {nxt:>6}  {status}")
+        n, published, length, nxt, status = leak_status(name)
+        print(_table_row(n, published, length, nxt, status))
 
 
 def cmd_status(args):
     """status 子命令：查看单个 leak 详情。"""
     name = resolve_leak(args.name)
-    use_leak(name)
-    secret = chain_post.load_secret()
-    length = secret["length"]
-    published = chain_post.load_state().get("published", 0)
-    print(f"leak：{name}")
-    print(f"链长度：{length}")
-    print(f"已生成：{published}")
-    print(f"下一帖：{published + 1}")
-    print("--- 帖子状态 ---")
-    for i in range(1, length + 1):
-        if i <= published:
-            print(f"第 {i} 帖：✅ 已生成（posts/{i:02d}.txt）")
-        elif os.path.exists(draft_path(name, i)):
-            print(f"第 {i} 帖：📝 有草稿（drafts/{i:02d}.txt）")
-        else:
-            print(f"第 {i} 帖：⬜ 无草稿")
+    _, published, length, nxt, status = leak_status(name)
+    print(_table_header())
+    print(_table_row(name, published, length, nxt, status))
+    if _VERBOSE:
+        draft_dir = os.path.join(leak_dir(name), "drafts")
+        shown = chain_post.status_indices(length, published, draft_dir)
+        for i in shown:
+            if i <= published:
+                print(f"post {i:02d}: ok  generated (posts/{i:02d}.txt)")
+            elif os.path.exists(draft_path(name, i)):
+                print(f"post {i:02d}: -   draft (drafts/{i:02d}.txt)")
+            else:
+                print(f"post {i:02d}: -   no draft")
     if published >= length:
-        warn("该链已用尽，请用 anon_leak create 开新链（可做跨链声明）。")
+        warn(f"chain {name} exhausted; open a new chain with anon_leak create")
     if args.check:
-        print("--- 本地自检 ---")
-        if verify_paths(collect_post_files(name)):
-            info("本地验证通过")
-        else:
-            warn("本地验证未通过")
+        okv, _ = verify_paths(collect_post_files(name))
+        print("verify: " + ("pass" if okv else "FAIL"))
+    next_block([
+        f"anon_leak start {name}          # write posts",
+        f"anon_leak verify {name}         # verify locally",
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +595,8 @@ def cmd_add(args):
     use_leak(name)
     published = chain_post.load_state().get("published", 0)
     index = args.index if args.index is not None else published + 1
-    validate_index(name, index)
+    secret, _ = validate_index(name, index)
+    length = secret["length"]
 
     if args.file is not None:
         content = read_file_content(args.file)
@@ -456,7 +608,7 @@ def cmd_add(args):
         content = read_content_interactive(index)
 
     if not content:
-        warn("正文为空，未发布")
+        warn("empty content, not published")
         return
 
     if args.dry_run:
@@ -465,8 +617,11 @@ def cmd_add(args):
 
     write_draft(name, index, content)
     publish_with_rollback(name, index)
-    info(f"第 {index} 帖已发布：{post_path(name, index)}")
-    print("📢 请把该文件全文通过匿名渠道公开（可用 anon_leak show 取出）。")
+    print(f"published {rel(post_path(name, index))}  ({index}/{length})")
+    next_block([
+        f'anon_leak add {name} -m "..."   # write next post',
+        f"anon_leak verify {name}         # verify locally",
+    ])
 
 
 def cmd_start(args):
@@ -475,8 +630,8 @@ def cmd_start(args):
     if name is None:
         leaks = discover_leaks()
         if not leaks:
-            print("当前目录下还没有 leak，先创建一个。")
-            name = input("请输入新 leak 名字：").strip()
+            print("no leak yet; create one.")
+            name = input("new leak name: ").strip()
             do_create(name)
         else:
             name = resolve_leak(None)
@@ -488,34 +643,31 @@ def cmd_start(args):
         published = chain_post.load_state().get("published", 0)
         nxt = published + 1
         if nxt > length:
-            skip(f"链 {name} 已用尽（共 {length} 帖）。")
-            print("建议：anon_leak create <新名字> 开新链。")
+            warn(f"chain {name} exhausted ({length} posts).")
+            print("suggest: anon_leak create <name>")
             break
 
-        print(f"\n=== 准备写第 {nxt} 帖（链长度 {length}，已发布 {published}）===")
+        print(f"post {nxt}/{length}")
         content = read_content_interactive(nxt)
         if not content.strip():
-            if confirm("正文为空，是否结束爆料流程？", default=True):
-                break
-            continue
-
-        preview_post(name, nxt, content)
-        if not confirm("发布这一帖？", default=False):
-            skip("已跳过，未发布。")
-            if not confirm("继续写下一帖？", default=True):
+            if confirm("content empty, finish?", default=True):
                 break
             continue
 
         write_draft(name, nxt, content)
         publish_with_rollback(name, nxt)
-        print("📢 请把该文件全文通过匿名渠道公开：")
-        print(f"   {post_path(name, nxt)}")
-        print(f"   （anon_leak show {name} {nxt} 可打印全文）")
+        okv, _ = verify_paths(collect_post_files(name))
+        print(f"published {rel(post_path(name, nxt))}")
+        print("verify: " + ("pass" if okv else "FAIL"))
 
-        if not confirm("继续写下一帖？", default=True):
+        if not confirm("write next post?", default=True):
             break
 
-    info(f"爆料流程结束。用 anon_leak status {name} 查看进度。")
+    next_block([
+        f'anon_leak add {name} -m "..."   # write next post',
+        f"anon_leak status {name}         # view progress",
+    ])
+    print("done.")
 
 
 # ---------------------------------------------------------------------------
@@ -523,22 +675,34 @@ def cmd_start(args):
 # ---------------------------------------------------------------------------
 def cmd_verify(args):
     """verify 子命令：验证一个 leak 的帖子，或直接验证目录/文件。"""
+    verify_name = None
     if args.dir:
         paths = chain_verify.collect_dir(args.dir)
     elif args.targets:
         if len(args.targets) == 1 and is_leak_name(args.targets[0]):
+            verify_name = args.targets[0]
             paths = collect_post_files(args.targets[0])
         else:
             paths = args.targets
     else:
-        name = resolve_leak(None)
-        paths = collect_post_files(name)
+        verify_name = resolve_leak(None)
+        paths = collect_post_files(verify_name)
 
-    if verify_paths(paths):
-        print("🎉 验证通过：所有帖子同源，顺序正确，正文未被篡改")
-        sys.exit(0)
-    print("⚠️ 验证失败，以上错误导致链条不可信")
-    sys.exit(1)
+    okv, results = verify_paths(paths)
+    if _VERBOSE:
+        chain_verify.print_verbose(results)
+        print()
+        chain_verify.print_summary(okv, results)
+    elif _QUIET:
+        print("verify: " + ("pass" if okv else "FAIL"))
+    else:
+        chain_verify.print_results(results, okv)
+    if okv and verify_name:
+        next_block([
+            f"anon_leak show {verify_name} 1      # view a post",
+            f"anon_leak export {verify_name}      # export for readers",
+        ])
+    sys.exit(0 if okv else 1)
 
 
 def resolve_show(args):
@@ -548,14 +712,14 @@ def resolve_show(args):
         try:
             index = int(args.index)
         except ValueError:
-            err(f"帖号必须是整数，收到：{args.index!r}")
+            err(f"index must be an integer, got: {args.index!r}")
         return name, index
     if args.name is None:
-        err("用法：anon_leak show [<名字>] <帖号>")
+        err("usage: anon_leak show [<name>] <index>")
     try:
         index = int(args.name)
     except ValueError:
-        err(f"帖号必须是整数，收到：{args.name!r}")
+        err(f"index must be an integer, got: {args.name!r}")
     return resolve_leak(None), index
 
 
@@ -564,16 +728,21 @@ def cmd_show(args):
     name, index = resolve_show(args)
     path = post_path(name, index)
     if not os.path.exists(path):
-        err(f"未找到帖子：{path}")
+        err(f"post not found: {rel(path)}")
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
     if args.payload_only:
         _, payload_text = chain_verify.split_post(text)
         if payload_text is None:
-            err("帖子缺少 ANON CHAIN 标记")
+            err("post missing ANON CHAIN markers")
         print(payload_text)
-    else:
-        print(text, end="")
+        return
+    print(f"post {index}  {rel(path)}")
+    print("─" * 40)
+    print(text, end="")
+    next_block([
+        f"anon_leak show {name} {index + 1}     # view next post",
+    ])
 
 
 def cmd_export(args):
@@ -581,35 +750,43 @@ def cmd_export(args):
     name = resolve_leak(args.name)
     posts = collect_post_files(name)
     if not posts:
-        err(f"leak {name} 还没有已发布的帖子")
+        err(f"leak {name} has no published posts")
 
     export_dir = args.out if args.out else os.path.join(leak_dir(name), EXPORT_DIR)
     os.makedirs(export_dir, exist_ok=True)
 
     for p in posts:
         shutil.copy2(p, os.path.join(export_dir, os.path.basename(p)))
-    info(f"已导出 {len(posts)} 篇帖子到：{export_dir}")
 
     if args.single:
         out = os.path.join(export_dir, args.single)
         with open(out, "w", encoding="utf-8", newline="\n") as f:
             for i, p in enumerate(posts):
                 if i:
-                    f.write("\n\n========== 下一篇 ==========\n\n")
+                    f.write("\n\n========== next ==========\n\n")
                 with open(p, "r", encoding="utf-8") as src:
                     f.write(src.read())
-        info(f"已生成阅读合集：{out}（仅阅读，验证请用分帖文件）")
 
     readme = os.path.join(export_dir, "README.txt")
     with open(readme, "w", encoding="utf-8", newline="\n") as f:
-        f.write("读者验证说明\n============\n\n")
-        f.write("本目录内的帖子来自同一条匿名哈希链。\n")
-        f.write("请用本项目的 chain_verify.py 验证：\n\n")
+        f.write("reader verification\n===================\n\n")
+        f.write("posts in this directory come from a single anonymous hash chain.\n")
+        f.write("verify with chain_verify.py:\n\n")
         f.write("    python chain_verify.py --dir .\n")
-        f.write("    或\n")
+        f.write("    # or\n")
         f.write("    python chain_verify.py 01.txt 02.txt ...\n\n")
-        f.write("验证通过会输出：🎉 验证通过：所有帖子同源，顺序正确，正文未被篡改\n")
-    info(f"已生成读者验证说明：{readme}")
+        f.write("on success it prints: verify: pass (n posts, same origin, order ok, no tamper)\n")
+
+    print(f"exported {len(posts)} posts to {rel(export_dir)}/")
+    for p in posts:
+        print(f"  {rel(os.path.join(export_dir, os.path.basename(p)))}")
+    if args.single:
+        print(f"  {rel(os.path.join(export_dir, args.single))}")
+    print(f"  {rel(os.path.join(export_dir, 'README.txt'))}")
+    next_block([
+        f"# send {rel(export_dir)}/ to readers",
+        f"# readers run: chain_verify.py --dir {rel(export_dir)}/",
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -623,83 +800,100 @@ def cmd_doctor(args):
     length = secret["length"]
     published = chain_post.load_state().get("published", 0)
     issues = 0
-
-    print(f"leak：{name}")
+    items = []  # (label, value, kind) kind in {ok, warn, note}
 
     post_files = collect_post_files(name)
     if len(post_files) != published:
-        warn(f"state 记录已发布 {published} 帖，但 posts/ 下有 {len(post_files)} 个文件")
+        items.append(("posts/", f"{len(post_files)} files", "ok"))
+        items.append(("state", f"records {published}, posts/ has {len(post_files)}", "warn"))
         issues += 1
     else:
-        info(f"posts/ 文件数（{published}）与 state 一致")
+        items.append(("posts/", f"{len(post_files)} files", "ok"))
+        items.append(("state", f"{published} published", "ok"))
 
     expected = [post_path(name, i) for i in range(1, published + 1)]
     if post_files != expected:
-        warn("posts/ 文件编号不连续或缺失")
+        items.append(("posts/", "numbering not continuous or missing", "warn"))
         issues += 1
 
     if published:
-        if verify_paths(post_files):
-            info("已发布帖子全部通过验证")
+        okv, _ = verify_paths(post_files)
+        if okv:
+            items.append(("verify", "all posts pass", "ok"))
         else:
-            warn("存在无法通过验证的帖子")
+            items.append(("verify", "some posts fail", "warn"))
             issues += 1
 
+    if gitignore_covers_secret(name):
+        items.append(("secret/", "ignored by .gitignore", "ok"))
+    else:
+        items.append(("secret/", "not in .gitignore", "warn"))
+        issues += 1
+
     drafts_dir = os.path.join(leak_dir(name), "drafts")
+    stale = 0
     if os.path.isdir(drafts_dir):
         for fn in sorted(os.listdir(drafts_dir)):
             if fn.endswith(".txt") and fn[:-4].isdigit():
                 i = int(fn[:-4])
                 if i > length:
-                    warn(f"草稿 drafts/{fn} 超出链长度 {length}")
+                    items.append(("drafts/", f"{fn} beyond length {length}", "warn"))
                     issues += 1
                 elif i <= published:
-                    note(f"草稿 drafts/{fn} 对应的帖子已生成，可删除")
-
-    if gitignore_covers_secret(name):
-        info(".gitignore 已忽略 secret/")
-    else:
-        warn("未在 .gitignore 中忽略 secret/，存在误提交风险")
-        issues += 1
+                    stale += 1
+    if stale:
+        items.append(("drafts/", f"{stale} stale (already published)", "note"))
 
     if published >= length:
-        warn("链已用尽，请开新链")
+        items.append(("chain", "exhausted, open a new chain", "warn"))
+        issues += 1
 
-    print("")
+    print(f"{name}: {'ok' if issues == 0 else color(str(issues) + ' issues', RED)}")
+    mark_color = {"ok": GREEN, "warn": RED, "note": DIM}
+    for label, value, kind in items:
+        print(f"  {label.ljust(10)}  {color(value, mark_color[kind])}")
     if issues == 0:
-        info("自检通过，未发现问题")
-        sys.exit(0)
-    warn(f"发现 {issues} 个问题")
-    sys.exit(1)
+        next_block([
+            f"anon_leak start {name}          # write posts",
+        ])
+    sys.exit(0 if issues == 0 else 1)
 
 
 def cmd_guide(args):
     """guide 子命令：匿名发布检查清单。"""
-    print("匿名发布检查清单")
-    print("================")
-    print("1. 渠道：使用可信的匿名渠道（多跳中继/一次性投递），别发到能关联你身份的平台。")
-    print("2. 元数据：以纯文本粘贴「正文 + ANON CHAIN 块」，避免文件携带作者、路径、时间等元信息。")
-    print("3. secret/ 绝不可公开：它含种子与整条链，泄露即失去「不可伪造」保证。")
-    print("4. 离线备份：把 secret/ 备份到离线介质；丢失种子将无法继续发布后续帖子。")
-    print("5. 链长度有限：用尽后 anon_leak create 开新链；跨链声明把旧链末帖 value 写进新链第 1 帖正文。")
-    print("6. 发布前自检：anon_leak verify <名字>，确保读者能验证通过。")
-    print("7. 别复用种子、别在联网设备明文保存 seed。")
+    print_banner(2)
+    print("anonymous publishing checklist")
+    print("  1. use a trusted anonymous channel")
+    print("  2. paste plain text only, no file metadata")
+    print("  3. never publish secret/")
+    print("  4. back up secret/ offline")
+    print("  5. open a new chain when exhausted")
+    print("  6. run `anon_leak verify <name>` before publishing")
+    print("  7. never reuse a seed")
+    next_block([
+        "anon_leak create <name>     # new chain",
+        "anon_leak start <name>      # write posts",
+    ])
 
 
 def cmd_overview(args):
     """无子命令时的总览。"""
+    print_banner(1)
     leaks = discover_leaks()
     if not leaks:
-        print("📝 当前目录下还没有 leak。")
-        print("   快速开始：")
-        print("     anon_leak create <名字>   创建一条爆料链")
-        print("     anon_leak start <名字>    开始写第一篇爆料")
-        print("     anon_leak guide           查看匿名发布清单")
+        print("no leaks yet.")
+        print("  anon_leak create <name>    create a chain")
+        print("  anon_leak start <name>     write first post")
+        print("  anon_leak guide            publishing checklist")
         return
-    print(f"发现 {len(leaks)} 个 leak：")
-    cmd_list(args)
-    print("")
-    print("常用命令：create / list / status / start / add / verify / show / export / doctor / guide")
+    print(_table_header())
+    for name in leaks:
+        n, published, length, nxt, status = leak_status(name)
+        print(_table_row(n, published, length, nxt, status))
+    next_block([
+        "anon_leak create <name>    # new chain",
+        "anon_leak start <name>     # write posts",
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -707,54 +901,61 @@ def cmd_overview(args):
 # ---------------------------------------------------------------------------
 def parse_args(argv=None):
     """解析命令行参数，返回 argparse.Namespace。"""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-q", "--quiet", action="store_true", default=argparse.SUPPRESS, help="print only the result line")
+    common.add_argument("--no-banner", action="store_true", default=argparse.SUPPRESS, help="suppress the banner")
+    common.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="print per-post detail")
+
     parser = argparse.ArgumentParser(
         prog="anon_leak",
-        description="anon-leak 一体化爆料工具：创建哈希链、写帖、发布、验证。",
+        description="anon-leak: create a hash chain, write posts, publish, verify.",
+        parents=[common],
     )
     parser.add_argument("--root", metavar="DIR", default=None,
-                        help="leak 工作区根目录（默认：当前目录）")
+                        help="workspace root directory (default: current directory)")
+    parser.add_argument("--version", action="store_true", help="print version and exit")
     sub = parser.add_subparsers(dest="command")
 
-    p_create = sub.add_parser("create", aliases=["new"], help="创建一条爆料链")
-    p_create.add_argument("name", help="leak 名字（作为文件夹名）")
-    p_create.add_argument("-n", "--length", type=int, default=None, help="链长度")
-    p_create.add_argument("-s", "--seed", default=None, help="种子（不给则隐藏回显交互输入）")
-    p_create.add_argument("--random-seed", action="store_true", help="用随机种子（仅显示一次）")
+    p_create = sub.add_parser("create", aliases=["new"], help="create a leak chain", parents=[common])
+    p_create.add_argument("name", help="leak name (folder name)")
+    p_create.add_argument("-n", "--length", type=int, default=1000000, help="chain length (default 1000000)")
+    p_create.add_argument("-s", "--seed", default=None, help="seed (prompt if omitted)")
+    p_create.add_argument("--random-seed", action="store_true", help="use a random seed (shown once)")
 
-    sub.add_parser("list", aliases=["ls"], help="列出所有 leak 及状态")
+    sub.add_parser("list", aliases=["ls"], help="list leaks and status", parents=[common])
 
-    p_status = sub.add_parser("status", aliases=["st"], help="查看单个 leak 详情")
-    p_status.add_argument("name", nargs="?", default=None, help="leak 名（省略则自动选中唯一的）")
-    p_status.add_argument("--check", action="store_true", help="附带本地验证")
+    p_status = sub.add_parser("status", aliases=["st"], help="show a leak's status", parents=[common])
+    p_status.add_argument("name", nargs="?", default=None, help="leak name (auto-pick if omitted)")
+    p_status.add_argument("--check", action="store_true", help="also verify locally")
 
-    p_start = sub.add_parser("start", aliases=["go"], help="引导式写帖并发布")
-    p_start.add_argument("name", nargs="?", default=None, help="leak 名（省略则自动选中；无 leak 则引导创建）")
+    p_start = sub.add_parser("start", aliases=["go"], help="guided write and publish", parents=[common])
+    p_start.add_argument("name", nargs="?", default=None, help="leak name (guided create if omitted)")
 
-    p_add = sub.add_parser("add", aliases=["publish"], help="非交互式添加并发布一帖")
-    p_add.add_argument("name", nargs="?", default=None, help="leak 名")
-    p_add.add_argument("-f", "--file", default=None, help="从文件读取正文")
-    p_add.add_argument("-m", "--message", default=None, help="直接给定正文")
-    p_add.add_argument("-i", "--index", type=int, default=None, help="帖号（默认：下一帖）")
-    p_add.add_argument("--dry-run", action="store_true", help="只预览不写入")
+    p_add = sub.add_parser("add", aliases=["publish"], help="add and publish one post", parents=[common])
+    p_add.add_argument("name", nargs="?", default=None, help="leak name")
+    p_add.add_argument("-f", "--file", default=None, help="read content from file")
+    p_add.add_argument("-m", "--message", default=None, help="content as argument")
+    p_add.add_argument("-i", "--index", type=int, default=None, help="post index (default: next)")
+    p_add.add_argument("--dry-run", action="store_true", help="preview only, do not write")
 
-    p_verify = sub.add_parser("verify", aliases=["check"], help="验证帖子")
-    p_verify.add_argument("targets", nargs="*", help="leak 名或帖子文件路径（可多个）")
-    p_verify.add_argument("--dir", metavar="DIR", default=None, help="验证某个目录")
+    p_verify = sub.add_parser("verify", aliases=["check"], help="verify posts", parents=[common])
+    p_verify.add_argument("targets", nargs="*", help="leak name or post files")
+    p_verify.add_argument("--dir", metavar="DIR", default=None, help="verify a directory")
 
-    p_show = sub.add_parser("show", aliases=["cat"], help="打印某帖全文")
-    p_show.add_argument("name", nargs="?", default=None, help="leak 名（可省略）")
-    p_show.add_argument("index", nargs="?", default=None, help="帖号")
-    p_show.add_argument("--payload-only", action="store_true", help="只打印 ANON CHAIN 块")
+    p_show = sub.add_parser("show", aliases=["cat"], help="print a post's full text", parents=[common])
+    p_show.add_argument("name", nargs="?", default=None, help="leak name (optional)")
+    p_show.add_argument("index", nargs="?", default=None, help="post index")
+    p_show.add_argument("--payload-only", action="store_true", help="print only the ANON CHAIN block")
 
-    p_export = sub.add_parser("export", help="导出可公开的帖子")
-    p_export.add_argument("name", nargs="?", default=None, help="leak 名")
-    p_export.add_argument("--out", metavar="DIR", default=None, help="导出目录（默认 <leak>/export）")
-    p_export.add_argument("--single", metavar="FILE", default=None, help="额外合并为一个阅读合集文件")
+    p_export = sub.add_parser("export", help="export public posts", parents=[common])
+    p_export.add_argument("name", nargs="?", default=None, help="leak name")
+    p_export.add_argument("--out", metavar="DIR", default=None, help="export dir (default <leak>/export)")
+    p_export.add_argument("--single", metavar="FILE", default=None, help="also merge into one reading file")
 
-    p_doctor = sub.add_parser("doctor", help="自检并给出修复建议")
-    p_doctor.add_argument("name", nargs="?", default=None, help="leak 名")
+    p_doctor = sub.add_parser("doctor", help="self-check and suggestions", parents=[common])
+    p_doctor.add_argument("name", nargs="?", default=None, help="leak name")
 
-    sub.add_parser("guide", help="匿名发布检查清单")
+    sub.add_parser("guide", help="anonymous publishing checklist", parents=[common])
 
     return parser.parse_args(argv)
 
@@ -762,8 +963,16 @@ def parse_args(argv=None):
 def main(argv=None):
     """程序入口：按子命令分发。"""
     args = parse_args(argv)
+    global _QUIET, _NO_BANNER, _VERBOSE
+    _QUIET = getattr(args, "quiet", False)
+    _NO_BANNER = getattr(args, "no_banner", False)
+    _VERBOSE = getattr(args, "verbose", False)
     if args.root is not None:
         set_root(args.root)
+
+    if args.version:
+        print_banner(3)
+        sys.exit(0)
 
     if args.command == "create":
         cmd_create(args)

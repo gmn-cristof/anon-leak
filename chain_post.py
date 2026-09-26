@@ -14,9 +14,11 @@
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
+import shutil
 import sys
 
 # ---------------------------------------------------------------------------
@@ -85,19 +87,38 @@ def load_json(path):
 # ---------------------------------------------------------------------------
 # 哈希链
 # ---------------------------------------------------------------------------
+def get_value(seed, length, index):
+    """返回第 index 帖应公开的链值（index 从 1 开始）。
+
+    等价于旧方案里的 chain[index - 1]。按需现场计算，不预存整条链：
+    从种子出发，重复哈希 (length - index + 1) 次。
+    """
+    cur = seed.encode("utf-8")
+    for _ in range(length - index + 1):
+        cur = sha256_hex(cur).encode("utf-8")
+    return cur.decode("utf-8")
+
+
+def compute_values(secret, index):
+    """返回第 index 帖的 (prev, value)。
+
+    value 由 get_value 现算（计算量 length - index + 1 次哈希）；
+    prev 由 SHA256(value) 一步得到（第 1 帖为锚点，prev 为空串）。
+    满足验证关系：SHA256(value_k) == prev_k。
+    """
+    seed = secret["seed"]
+    length = secret["length"]
+    value = get_value(seed, length, index)
+    prev = "" if index == 1 else sha256_text(value)
+    return prev, value
+
+
 def build_chain(seed, length):
     """由种子 seed 生成长度为 length 的哈希链，按「发布顺序」返回。
 
-    计算过程（与需求一致）：
-        cur = seed.encode("utf-8")
-        重复 length 次：cur = SHA256(cur).hexdigest()，每次结果存入 chain 列表
-
-    存储顺序说明：为满足验证规则「第 k 帖满足 SHA256(value) == prev」，
-    同时保证「拿到公开 value 无法推出下一帖 value（需求 SHA-256 原像），
-    攻击者无法伪造后续帖子」，计算完成后按「发布顺序」排列：
-        chain[0] = 第 1 帖公开的根值（最后一次计算的结果）
-        chain[1] = 第 2 帖公开的值
-        ……依此类推，chain[-1] = 第一次计算的结果。
+    注意：方案 B 的主路径不再预存整条链，此函数仅在「旧格式迁移」时
+    用于校验旧文件里的链是否与种子匹配，属于兼容逻辑，请勿在正常发布
+    流程中使用（会占用与 length 成正比的内存与时间）。
     """
     chain = []
     cur = seed.encode("utf-8")
@@ -111,26 +132,111 @@ def build_chain(seed, length):
 # ---------------------------------------------------------------------------
 # 私密链与状态读写
 # ---------------------------------------------------------------------------
-def load_secret():
-    """读取 secret/chain_secret.json，不存在或损坏时给出中文错误并退出。"""
-    if not os.path.exists(SECRET_FILE):
-        print("❌ 未找到私密链文件 secret/chain_secret.json，请先运行：python chain_post.py init")
-        sys.exit(1)
-    try:
-        return load_json(SECRET_FILE)
-    except (OSError, ValueError) as exc:
-        print(f"❌ 读取私密链文件失败（secret/chain_secret.json）：{exc}")
-        sys.exit(1)
+def _is_v2_secret(obj):
+    """判断是否为方案 B 的 v2 格式：dict 且带 version==2、seed、length。"""
+    return (
+        isinstance(obj, dict)
+        and obj.get("version") == 2
+        and isinstance(obj.get("seed"), str)
+        and isinstance(obj.get("length"), int)
+    )
 
 
-def save_secret(seed, length, chain):
-    """把种子、长度与整条链写入 secret/chain_secret.json。"""
-    save_json(SECRET_FILE, {
-        "scheme": SCHEME,
-        "hash": HASH_NAME,
+def _legacy_kind(obj):
+    """判断旧格式类型，返回 None（非旧格式）或 'array' / 'dict'。"""
+    if isinstance(obj, list):
+        return "array"
+    if isinstance(obj, dict) and isinstance(obj.get("chain"), list):
+        return "dict"
+    return None
+
+
+def _migrate_secret(obj):
+    """把旧格式（数组或 dict+chain）迁移为 v2，返回 v2 字典。
+
+    迁移前先把旧文件备份为 secret/chain_secret.json.bak（绝不删除旧文件）。
+    旧数组无法反推种子，因此需要用户提供原种子；旧 dict 若已带 seed 则先
+    自动校验，校验不通过再向用户索要。校验通过才写入新格式。
+    """
+    kind = _legacy_kind(obj)
+    if kind == "array":
+        chain = obj
+        length = len(chain)
+        known_seed = None
+    else:  # kind == "dict"
+        chain = obj["chain"]
+        length = obj.get("length", len(chain))
+        known_seed = obj.get("seed")
+
+    print("warn: legacy secret/chain_secret.json detected (" +
+          ("JSON array" if kind == "array" else "dict with full chain") + ").")
+    print("      new scheme (plan B) only stores seed + length; original seed is needed to verify and migrate.")
+
+    seed = known_seed
+    if seed is not None:
+        if build_chain(seed, length) == chain:
+            print(f"      seed {seed!r} recorded in file verified, migrating automatically.")
+        else:
+            print("      seed recorded in file does not match chain; please provide the original seed.")
+            seed = None
+
+    if seed is None:
+        try:
+            seed = input("enter original seed to migrate: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("error: no seed input, migration cancelled. back up secret/ and re-init.", file=sys.stderr)
+            sys.exit(1)
+        if not seed:
+            print("error: seed cannot be empty, migration cancelled. back up secret/ and re-init.", file=sys.stderr)
+            sys.exit(1)
+        if build_chain(seed, length) != chain:
+            print("error: seed does not match old chain, migration failed. back up secret/ and re-init.", file=sys.stderr)
+            sys.exit(1)
+
+    # 先备份旧文件，绝不删除
+    backup_path = SECRET_FILE + ".bak"
+    shutil.copy2(SECRET_FILE, backup_path)
+
+    created_at = datetime.datetime.now().isoformat(timespec="seconds")
+    new_secret = {
+        "version": 2,
         "seed": seed,
         "length": length,
-        "chain": chain,
+        "created_at": created_at,
+    }
+    save_secret(seed, length, created_at=created_at)
+    print(f"ok: migrated to plan B format (seed + length only), old file backed up as secret/chain_secret.json.bak")
+    return new_secret
+
+
+def load_secret():
+    """读取 secret/chain_secret.json；旧格式自动迁移，损坏则报错退出。"""
+    if not os.path.exists(SECRET_FILE):
+        print("error: no secret file secret/chain_secret.json, run: python chain_post.py init", file=sys.stderr)
+        sys.exit(1)
+    try:
+        obj = load_json(SECRET_FILE)
+    except (OSError, ValueError) as exc:
+        print(f"error: failed to read secret file (secret/chain_secret.json): {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if _is_v2_secret(obj):
+        return obj
+    if _legacy_kind(obj) is not None:
+        return _migrate_secret(obj)
+    print("error: unrecognized secret/chain_secret.json format (not v2 nor legacy)", file=sys.stderr)
+    sys.exit(1)
+
+
+def save_secret(seed, length, created_at=None):
+    """把种子与长度写入 secret/chain_secret.json（v2，只存种子与长度）。"""
+    if created_at is None:
+        created_at = datetime.datetime.now().isoformat(timespec="seconds")
+    save_json(SECRET_FILE, {
+        "version": 2,
+        "seed": seed,
+        "length": length,
+        "created_at": created_at,
     })
 
 
@@ -141,7 +247,7 @@ def load_state():
     try:
         return load_json(STATE_FILE)
     except (OSError, ValueError):
-        print("❌ 读取状态文件失败（secret/chain_state.json），文件可能已损坏")
+        print("error: failed to read state file (secret/chain_state.json), file may be corrupted", file=sys.stderr)
         sys.exit(1)
 
 
@@ -189,33 +295,32 @@ def read_draft(index):
         return f.read().rstrip("\n")
 
 
-def publish(index):
+def publish(index, quiet=False):
     """生成并发布第 index 帖（写 posts/NN.txt 并更新 state）。
 
     依次做越界、重复生成、跳号、缺草稿等校验，任一不满足则报错退出。
+    quiet 为 True 时不打印成功信息（供 anon_leak 上层自行输出）。
     """
     secret = load_secret()
     length = secret["length"]
-    chain = secret["chain"]
     published = load_state().get("published", 0)
 
     if index < 1 or index > length:
-        print(f"❌ 帖号越界：链长度为 {length}，无法生成第 {index} 帖")
+        print(f"error: post index out of range: length {length}, cannot generate post {index}", file=sys.stderr)
         sys.exit(1)
     if index <= published:
-        print(f"❌ 第 {index} 帖已生成过（posts/{index:02d}.txt 已存在），请勿重复生成")
+        print(f"error: post {index} already generated (posts/{index:02d}.txt exists)", file=sys.stderr)
         sys.exit(1)
     if index != published + 1:
-        print(f"❌ 跳号：当前下一帖应为第 {published + 1} 帖，不能直接生成第 {index} 帖")
+        print(f"error: skip detected: next post is {published + 1}, cannot generate {index}", file=sys.stderr)
         sys.exit(1)
 
     content = read_draft(index)
     if content is None:
-        print(f"❌ 未找到草稿 drafts/{index:02d}.txt，请先写入正文")
+        print(f"error: draft not found: drafts/{index:02d}.txt", file=sys.stderr)
         sys.exit(1)
 
-    prev = "" if index == 1 else chain[index - 2]
-    value = chain[index - 1]
+    prev, value = compute_values(secret, index)
     payload = make_payload(index, prev, value, content)
     post_text = render_post(content, payload)
 
@@ -224,7 +329,8 @@ def publish(index):
         f.write(post_text)
 
     save_state(index)
-    print(f"✅ 已生成 posts/{index:02d}.txt（第 {index} 帖，已发布 {index}/{length}）")
+    if not quiet:
+        print(f"ok: generated posts/{index:02d}.txt (post {index}, published {index}/{length})")
 
 
 # ---------------------------------------------------------------------------
@@ -241,48 +347,50 @@ def cmd_init(args):
         if args.yes:
             answer = "YES"
         else:
-            print("⚠️ 已存在 secret/chain_secret.json，覆盖将丢失原有私密链。")
+            print("warn: secret/chain_secret.json exists, overwrite will lose the chain.")
             try:
-                answer = input("请输入 YES 确认覆盖：").strip()
+                answer = input("enter YES to overwrite: ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("❌ 未收到确认输入，已取消覆盖")
+                print("error: no confirmation input, overwrite cancelled", file=sys.stderr)
                 sys.exit(1)
         if answer != "YES":
-            print("⚠️ 未输入 YES，已取消覆盖")
+            print("warn: not YES, overwrite cancelled")
             sys.exit(0)
 
     if seed is None:
         try:
-            seed = input("请输入种子（seed）：").strip()
+            seed = input("enter seed: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("❌ 未收到种子输入")
+            print("error: no seed input", file=sys.stderr)
             sys.exit(1)
     if not seed:
-        print("❌ 种子不能为空")
+        print("error: seed cannot be empty", file=sys.stderr)
         sys.exit(1)
 
     if length is None:
         try:
-            length_raw = input("请输入链长度（length，正整数）：").strip()
+            length_raw = input("enter chain length (default 1000000, empty to use default): ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("❌ 未收到链长度输入")
+            print("error: no length input", file=sys.stderr)
             sys.exit(1)
-        try:
-            length = int(length_raw)
-        except ValueError:
-            print(f"❌ 链长度必须是整数，收到：{length_raw!r}")
-            sys.exit(1)
+        if length_raw == "":
+            length = 1000000
+        else:
+            try:
+                length = int(length_raw)
+            except ValueError:
+                print(f"error: length must be an integer, got: {length_raw!r}", file=sys.stderr)
+                sys.exit(1)
     if length < 1:
-        print("❌ 链长度必须为正整数")
+        print("error: length must be a positive integer", file=sys.stderr)
         sys.exit(1)
 
-    chain = build_chain(seed, length)
-    save_secret(seed, length, chain)
+    save_secret(seed, length)
     save_state(0)
 
-    print(f"✅ 已生成私密链：长度 {length}，种子 {seed!r}")
-    print("✅ 已写入 secret/chain_secret.json 与 secret/chain_state.json（published=0）")
-    print("⚠️ secret/ 目录绝不可公开；接下来请在 drafts/NN.txt 写入正文（NN 为两位序号）。")
+    print(f"ok: chain created: length {length}, seed {seed!r}")
+    print("ok: wrote secret/chain_secret.json and secret/chain_state.json (published=0)")
+    print("warn: never publish secret/; write drafts as drafts/NN.txt (NN two-digit).")
 
 
 def cmd_build(args):
@@ -300,17 +408,38 @@ def cmd_build(args):
 
     nxt = published + 1
     if nxt > length:
-        print(f"⏭️ 已达链长度上限（{length} 帖），没有可生成的帖子")
+        print(f"skip: chain length limit reached ({length} posts), nothing to generate")
         return
 
     while nxt <= length:
         if read_draft(nxt) is None:
-            print(f"⏭️ 第 {nxt} 帖无草稿（drafts/{nxt:02d}.txt），停止生成")
+            print(f"skip: no draft for post {nxt} (drafts/{nxt:02d}.txt), stopping")
             return
         publish(nxt)
         nxt += 1
 
-    print(f"⏭️ 已达链长度上限（{length} 帖），全部生成完毕")
+    print(f"skip: chain length limit reached ({length} posts), all generated")
+
+
+def status_indices(length, published, draft_dir, limit=20):
+    """返回 status 需要展示的帖号列表（有界，避免长链刷屏）。
+
+    展示：前 min(published, limit) 个已发布帖、drafts/ 里实际存在的草稿、
+    以及下一帖。结果升序且限定在 [1, length] 范围内。
+    对长度很小的链，输出与原「逐帖展示」一致。
+    """
+    indices = set()
+    for i in range(1, min(published, limit) + 1):
+        indices.add(i)
+    if published + 1 <= length:
+        indices.add(published + 1)
+    if os.path.isdir(draft_dir):
+        for name in os.listdir(draft_dir):
+            if name.endswith(".txt") and name[:-4].isdigit():
+                idx = int(name[:-4])
+                if 1 <= idx <= length:
+                    indices.add(idx)
+    return sorted(i for i in indices if 1 <= i <= length)
 
 
 def cmd_status(args):
@@ -319,18 +448,22 @@ def cmd_status(args):
     length = secret["length"]
     published = load_state().get("published", 0)
 
-    print(f"链长度：{length}")
-    print(f"已生成：{published}")
-    print(f"下一帖：{published + 1}")
+    print(f"length:   {length}")
+    print(f"published: {published}")
+    print(f"next:     {published + 1}")
 
-    print("--- 草稿状态 ---")
-    for i in range(1, length + 1):
+    print("--- post status ---")
+    shown = status_indices(length, published, DRAFTS_DIR)
+    for i in shown:
         if i <= published:
-            print(f"第 {i} 帖：✅ 已生成（posts/{i:02d}.txt）")
+            print(f"post {i:02d}: ok  generated (posts/{i:02d}.txt)")
         elif os.path.exists(os.path.join(DRAFTS_DIR, f"{i:02d}.txt")):
-            print(f"第 {i} 帖：📝 有草稿（drafts/{i:02d}.txt）")
+            print(f"post {i:02d}: -   draft (drafts/{i:02d}.txt)")
         else:
-            print(f"第 {i} 帖：⬜ 无草稿")
+            print(f"post {i:02d}: -   no draft")
+    remaining = length - len(shown)
+    if remaining > 0:
+        print(f"({remaining} posts not shown, use add -i or drafts/NN.txt)")
 
     # 超出链长度的草稿提醒（存在时）
     if os.path.isdir(DRAFTS_DIR):
@@ -341,7 +474,7 @@ def cmd_status(args):
                 if idx > length:
                     extra.append(idx)
         for idx in extra:
-            print(f"⚠️ 第 {idx} 帖草稿（drafts/{idx:02d}.txt）超出链长度 {length}，将被忽略")
+            print(f"warn: draft {idx:02d} (drafts/{idx:02d}.txt) beyond length {length}, will be ignored")
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +517,8 @@ def main(argv=None):
     elif args.command == "status":
         cmd_status(args)
     else:
-        print("❌ 缺少子命令，请使用 init / build / status", file=sys.stderr)
-        print("运行 python chain_post.py --help 查看帮助", file=sys.stderr)
+        print("error: missing subcommand, use init / build / status", file=sys.stderr)
+        print("run: python chain_post.py --help", file=sys.stderr)
         sys.exit(2)
 
 

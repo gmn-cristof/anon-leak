@@ -14,7 +14,7 @@ anon-leak/
 ├── README.md            # 使用说明（本文件）
 ├── .gitignore           # 内容为 secret/
 ├── secret/              # 私有目录（运行时生成，绝不可公开）
-│   ├── chain_secret.json   # 种子、长度与整条链
+│   ├── chain_secret.json   # 只存种子与长度（方案 B：{"version":2, seed, length, created_at}）
 │   └── chain_state.json    # 已发布数量 {"published": n}
 ├── drafts/              # 原始正文（NN.txt，NN 为两位零填充）
 │   ├── 01.txt
@@ -43,6 +43,9 @@ python anon_leak.py start demo                # 引导式写第一篇并发布
 python anon_leak.py verify demo               # 本地验证
 ```
 
+> `-n` 默认值为 **1000000**（一百万），不写也能创建一条几乎用不完的链；
+> 链值按需现算，`secret/` 文件始终只有几百字节。
+
 - 种子默认用 `getpass` **隐藏回显**并二次确认；也可 `-s 种子` 或 `--random-seed`。
 - 命令都带**别名**：`create=new`、`list=ls`、`status=st`、`start=go`、`add=publish`、
   `verify=check`、`show=cat`。
@@ -68,23 +71,39 @@ python anon_leak.py verify demo               # 本地验证
 
 ```text
 $ python anon_leak.py create demo -n 2 -s s1
-✅ 已创建 leak：demo
-✅ 链长度：2
-✅ 根值（第 1 帖公开的 value）：7861710f76ab0b7777a0b1ed1596e3f49ed19da83fab25289c8df8b32e27c51e
-📝 请务必离线备份 secret/ 目录，丢失种子将无法继续发布后续帖子。
+seed:    ****************
+length:  2
+root:    7861710f76ab0b7777a0b1ed1596e3f4...
+created: demo
+backup:  demo/secret/ (offline, never publish)
+
+next:
+  anon_leak start demo      # write post 1
+  anon_leak guide           # anonymous publishing checklist
 
 $ python anon_leak.py add demo -m "第一篇爆料正文"
-✅ 已生成 posts/01.txt（第 1 帖，已发布 1/2）
---- 第 1 帖（01.txt）---
-  ✅ 正文哈希匹配
-  ✅ 内容绑定匹配
-  ✅ 锚点正常
-✅ 第 1 帖已发布：demo/posts/01.txt
-📢 请把该文件全文通过匿名渠道公开。
+published demo/posts/01.txt  (1/2)
+
+next:
+  anon_leak add demo -m "..."   # write next post
+  anon_leak verify demo         # verify locally
 
 $ python anon_leak.py verify demo
-🎉 验证通过：所有帖子同源，顺序正确，正文未被篡改
+POST   HASH   BIND   CHAIN
+01     ok     ok     ok
+
+verify: pass (1 posts, same origin, order ok, no tamper)
+
+next:
+  anon_leak show demo 1      # view a post
+  anon_leak export demo      # export for readers
 ```
+
+> 输出为纯 ASCII 紧凑风格：成功一行摘要、表格对齐、每条命令结尾给出 `next:` 提示。
+> 颜色仅在终端（TTY）下启用，重定向到文件时自动无色；`create` / `guide` / 无参数总览
+> 会在 TTY 下显示极简 banner。全局选项：`--quiet`（只打印结果行）、`--no-banner`、
+> `--verbose`（`verify`/`status` 打印逐帖详情）、`--version`。退出码：成功 0、
+> 验证失败 1、其他错误 2。
 
 ### 安装到 PATH（可选）
 
@@ -110,12 +129,15 @@ python chain_post.py init
 按提示输入种子（seed）和链长度（length）。脚本会生成 `secret/chain_secret.json` 与 `secret/chain_state.json`，并自动创建 `secret/`、`drafts/`、`posts/` 三个目录。
 
 ```text
-请输入种子（seed）：test-seed
-请输入链长度（length，正整数）：3
-✅ 已生成私密链：长度 3，种子 'test-seed'
-✅ 已写入 secret/chain_secret.json 与 secret/chain_state.json（published=0）
-⚠️ secret/ 目录绝不可公开；接下来请在 drafts/NN.txt 写入正文（NN 为两位序号）。
+enter seed: test-seed
+enter chain length (default 1000000, empty to use default): 3
+ok: chain created: length 3, seed 'test-seed'
+ok: wrote secret/chain_secret.json and secret/chain_state.json (published=0)
+warn: never publish secret/; write drafts as drafts/NN.txt (NN two-digit).
 ```
+
+> 现在 `secret/chain_secret.json` 只存种子、长度与创建时间（方案 B），
+> **不再预存整条链**；链长度可以直接回车取默认的一百万，几乎无需担心用尽。
 
 > 若 `secret/chain_secret.json` 已存在，脚本会提示覆盖，必须输入全大写 `YES` 才会覆盖。
 
@@ -137,13 +159,13 @@ python chain_post.py build --all         # 从下一帖起连续生成，直到�
 ```
 
 ```text
-✅ 已生成 posts/01.txt（第 1 帖，已发布 1/3）
-✅ 已生成 posts/02.txt（第 2 帖，已发布 2/3）
-✅ 已生成 posts/03.txt（第 3 帖，已发布 3/3）
-⏭️ 已达链长度上限（3 帖），全部生成完毕
+ok: generated posts/01.txt (post 1, published 1/3)
+ok: generated posts/02.txt (post 2, published 2/3)
+ok: generated posts/03.txt (post 3, published 3/3)
+skip: chain length limit reached (3 posts), all generated
 ```
 
-跳号、越界、找不到草稿、重复生成都会给出清晰的 `❌` 错误并退出。
+跳号、越界、找不到草稿、重复生成都会给出清晰的 `error:` 错误并退出。
 
 ### 4. 查看状态
 
@@ -152,13 +174,13 @@ python chain_post.py status
 ```
 
 ```text
-链长度：3
-已生成：3
-下一帖：4
---- 草稿状态 ---
-第 1 帖：✅ 已生成（posts/01.txt）
-第 2 帖：✅ 已生成（posts/02.txt）
-第 3 帖：✅ 已生成（posts/03.txt）
+length:    3
+published: 3
+next:      4
+--- post status ---
+post 01: ok  generated (posts/01.txt)
+post 02: ok  generated (posts/02.txt)
+post 03: ok  generated (posts/03.txt)
 ```
 
 最后只需把 `posts/` 下的 `.txt` 全文通过匿名渠道公开即可（渠道自理，本工具不联网）。
@@ -186,55 +208,82 @@ python chain_verify.py posts/01.txt posts/02.txt posts/03.txt
 ### 成功
 
 ```text
---- 第 1 帖（01.txt）---
-  ✅ 正文哈希匹配
-  ✅ 内容绑定匹配
-  ✅ 锚点正常
---- 第 2 帖（02.txt）---
-  ✅ 正文哈希匹配
-  ✅ 内容绑定匹配
-  ✅ 链值连续
---- 第 3 帖（03.txt）---
-  ✅ 正文哈希匹配
-  ✅ 内容绑定匹配
-  ✅ 链值连续
-🎉 验证通过：所有帖子同源，顺序正确，正文未被篡改
+POST   HASH   BIND   CHAIN
+01     ok     ok     ok
+02     ok     ok     ok
+03     ok     ok     ok
+
+verify: pass (3 posts, same origin, order ok, no tamper)
 ```
 
 （退出码 0）
 
+> 加 `--verbose`（或 `-v`）可打印每帖的详细验证过程；`--quiet`（或 `-q`）只打印结果行。
+
 ### 失败（正文被篡改）
 
 ```text
---- 第 2 帖（02.txt）---
-  ❌ 正文哈希不匹配（content_hash 与正文的 SHA-256 不一致）
-  ✅ 内容绑定匹配
-  ✅ 链值连续
-⚠️ 验证失败，以上错误导致链条不可信
+POST   HASH   BIND   CHAIN
+01     ok     ok     ok
+02     FAIL   ok     ok
+03     ok     ok     ok
+
+verify: FAIL
+  02.txt: content_hash mismatch (post tampered)
+  expected  a1b2c3...
+  actual    9f8e7d...
 ```
 
-（退出码非 0）
+（退出码 1）
 
 ### 失败（prev 被篡改 / 链值不连续）
 
 ```text
---- 第 3 帖（03.txt）---
-  ❌ 链值不连续：SHA256(value) ≠ prev（prev 不匹配）
-⚠️ 验证失败，以上错误导致链条不可信
+POST   HASH   BIND   CHAIN
+01     ok     ok     ok
+02     ok     ok     ok
+03     ok     ok     FAIL
+
+verify: FAIL
+  03.txt: SHA256(value) != prev
+  expected  <上一帖的 value>
+  actual    <本帖的 prev>
 ```
+
+（退出码 1）
 
 ## 原理说明
 
-1. **哈希链**：从种子出发反复计算 `SHA256`，得到一串值；按「后计算的先发布」的顺序公开，使第 k 帖满足 `SHA256(value_k) == prev_k`。这样拿到公开值无法反推出下一帖的值（需破解 SHA-256 原像），保证后续帖子不可伪造。
+1. **哈希链**：从种子出发反复计算 `SHA256`，得到一串值；按「后计算的先发布」的顺序公开，使第 k 帖满足 `SHA256(value_k) == prev_k`。这样拿到公开值无法反推出下一帖的值（需破解 SHA-256 原像），保证后续帖子不可伪造。第 k 帖的链值不再预存，而是发布时现场计算：`value_k = get_value(seed, length, k)`（从种子哈希 `length - k + 1` 次），`prev_k = SHA256(value_k)`。
 2. **同源判定**：相邻帖子通过 `prev = 上一帖的 value` 串联，只有持有同一 seed 的人才能连续公布合法值。
 3. **顺序判定**：`index` 从 1 开始连续递增，且第 1 帖的 `prev` 必须为空字符串（锚点）。
 4. **防篡改**：每帖记录 `content_hash = SHA256(正文)`，正文任何一处改动都会导致哈希不匹配。
 5. **内容绑定**：`bind = SHA256(value + "|" + content_hash)` 把链值与正文绑定，防止「拿 A 帖的正文配 B 帖的链值」这类拼接攻击。
 
+## 为什么链长度可以设很大
+
+方案 B 不再预存整条链，只保存种子与长度，因此 `length` 可以放心设成一百万（甚至更大）：
+
+- **存储恒定**：`secret/chain_secret.json` 始终只有几百字节，与 `length` 无关。
+- **按需现算**：第 k 帖的链值 = 从种子出发哈希 `length - k + 1` 次，只在发布该帖时计算。
+- **速度递减**：第 1 帖最慢（约 0.5 秒 @ 100 万次 SHA-256），之后每篇少一次哈希，越往后越快。
+- **内存恒定**：生成过程不缓存、不写中间文件，内存占用与 `length` 无关。
+
+## 从旧版本迁移
+
+旧版本会把整条链存进 `secret/chain_secret.json`（JSON 数组，或 dict 里的 `chain` 字段）。升级后：
+
+- 运行**任意命令**（`status` / `add` / `build` / …）读取旧文件时，会提示检测到旧格式。
+- 裸数组无法反推种子，因此需要你**手动提供原种子**来校验并迁移；
+  旧 dict 若自带 `seed` 且校验通过，会**自动迁移**，无需输入。
+- 迁移前会先把旧文件**备份为 `secret/chain_secret.json.bak`**（绝不删除旧文件），
+  校验通过后写入新的 v2 格式（只存种子与长度）。
+- 若种子与旧链不匹配或你放弃迁移，程序会报错退出，提示手动备份后重新 `init`。
+
 ## 安全提醒
 
-- **`secret/` 绝不可公开**：它包含种子和整条链，泄露后任何人都能冒充爆料人。项目自带 `.gitignore` 已忽略 `secret/`。
-- **链长度有限**：链用完后需重新 `init` 生成新链；不要复用同一 seed。
+- **`secret/` 绝不可公开**：它包含种子。**种子泄露 = 整条链泄露**，包括所有未来帖子，任何人都能冒充爆料人。项目自带 `.gitignore` 已忽略 `secret/`。
+- **链长度仍有限**：默认 100 万，理论上仍可能用尽；用尽后需重新 `init` 开新链，且**不要复用同一 seed**。
 - **跨链方法**：若需开新链并让读者知道新旧链条同源，可在新链第 1 帖正文里公开旧链最后一帖的 `value` 作为声明锚点。
 - **匿名渠道自理**：本工具只负责「绑定与验证」，帖子的匿名发布、投递渠道、时效性由爆料人自行选择，请务必使用安全的匿名渠道。
 
