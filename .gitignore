@@ -7,6 +7,18 @@ export/
 # Python
 __pycache__/
 *.pyc
+*.pyo
+
+# 构建产物
+dist/
+build/
+*.spec
+*.egg-info/
+
+# 虚拟环境 / 环境变量
+.venv/
+venv/
+.env
 
 # 系统
 .DS_Store

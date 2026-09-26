@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anon-leak"
+version = "0.2.0"
+description = "Anonymous hash-chain leak tool"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.6"
+authors = [{name = "anonymous"}]
+keywords = ["anonymous", "hash-chain", "leak", "verify"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+]
+
+[project.scripts]
+anon-leak = "anon_leak:main"
+chain-verify = "chain_verify:main"
+chain-post = "chain_post:main"
+
+[tool.setuptools]
+py-modules = ["anon_leak", "chain_verify", "chain_post"]

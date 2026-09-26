@@ -2,6 +2,43 @@
 
 一个只依赖 Python 标准库的匿名哈希链爆料工具。它让匿名爆料人把多篇帖子通过一条 SHA-256 哈希链绑定成可验证的链条：读者仅凭公开的帖子正文，即可验证「所有帖子来自同一爆料人」「帖子顺序正确」「正文未被篡改」，并且攻击者无法伪造后续帖子。全程不联网、不用区块链、不依赖任何第三方服务。
 
+## 安装
+
+### 方式一：pip 安装
+
+```bash
+pip install anon-leak
+```
+
+安装后可直接使用：
+
+```bash
+anon-leak create demo
+anon-leak start demo
+anon-leak verify demo
+```
+
+### 方式二：下载单文件可执行程序
+
+从 GitHub Releases 下载对应平台的文件：
+
+- anon-leak-windows/anon_leak.exe
+- anon-leak-macos/anon_leak
+- anon-leak-linux/anon_leak
+
+```bash
+chmod +x anon_leak   # Linux/macOS 需要
+./anon_leak create demo
+```
+
+### 方式三：源码运行
+
+```bash
+git clone https://github.com/<your-account>/anon-leak.git
+cd anon-leak
+python3 anon_leak.py create demo
+```
+
 ## 目录结构
 
 ```
@@ -293,3 +330,9 @@ verify: FAIL
 - 底层脚本 `chain_post.py` / `chain_verify.py` 仅用 `hashlib`、`json`、`os`、`sys`、`argparse`。
 - 一体化 CLI `anon_leak.py` 额外使用 `getpass`（种子隐藏回显）、`datetime`（创建时间）、`shutil`（导出复制）等标准库模块。
 - 命令名：Windows 下通常为 `python`，Linux / macOS 若没有 `python` 别名则用 `python3`。
+
+## 发布
+
+- 打 tag（如 `v0.2.0`）触发 GitHub Actions 自动构建三平台单文件可执行程序。
+- 三平台产物在 GitHub Releases 页面。
+- 发布前运行 `scripts/preflight.sh`（Linux/macOS）或 `scripts/preflight.cmd`（Windows）做检查。
