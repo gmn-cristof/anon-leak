@@ -1,1 +1,13 @@
+# 运行时产物（每个 leak 一个目录，含敏感种子，绝不提交）
 secret/
+drafts/
+posts/
+export/
+
+# Python
+__pycache__/
+*.pyc
+
+# 系统
+.DS_Store
+
