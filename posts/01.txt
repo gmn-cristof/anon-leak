@@ -1,0 +1,14 @@
+【爆料一】某公司财务造假，虚增营收3.7亿。
+后续两份将公布账目细节和幕后指使人。
+
+-----BEGIN ANON CHAIN-----
+{
+  "bind": "c8b506b18aa459d63c09bf427357c0fb732bba113878b466d37ccd7f34248e76",
+  "content_hash": "2d03e6f34dbc03a6c38786b7b94e406a9f0505e2bc2b3ea0afa8cd87597ce92c",
+  "hash": "sha256",
+  "index": 1,
+  "prev": "",
+  "scheme": "anon-hash-chain-v1",
+  "value": "66498f85d6439b7a02cd6137aed5cca174481f2a895465d906e5fed6c766516c"
+}
+-----END ANON CHAIN-----

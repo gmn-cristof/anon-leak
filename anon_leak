@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# anon_leak 启动器：调用同目录的 anon_leak.py（POSIX：Linux / macOS）
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$SCRIPT_DIR/anon_leak.py" "$@"

@@ -1,0 +1,14 @@
+【爆料三】幕后指使人：时任CFO张某，通过私人邮箱下达指令。
+相关邮件截图已存证。
+
+-----BEGIN ANON CHAIN-----
+{
+  "bind": "3db6b7fba4644b1b572828a2615b4e9e53fa25ddc570aa52260a9ac2c0b1a8f4",
+  "content_hash": "a7166a5f76f30f0e88b024f0c592588dbea5080b68dd51e2a9466a3d4f0fe72c",
+  "hash": "sha256",
+  "index": 3,
+  "prev": "ece53d7a2dfbb268ef97fb4dd6349af6426ae44668d4cac60ebb7bb80eb76690",
+  "scheme": "anon-hash-chain-v1",
+  "value": "d63cd08d82aa4eb48e0cc64fb466e909bfc3879664c5caa8d8cdeda73c044190"
+}
+-----END ANON CHAIN-----
